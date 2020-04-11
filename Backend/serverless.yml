@@ -1,0 +1,284 @@
+service:
+  name: serverless-movies-app
+# app and org for use with dashboard.serverless.com
+#app: your-app-name
+#org: your-org-name
+
+# Add the serverless-webpack plugin
+plugins:
+  - serverless-webpack
+  - serverless-aws-documentation
+  - serverless-reqvalidator-plugin
+  - serverless-iam-roles-per-function
+
+# package:
+#   individually: true   
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'eu-west-3'}
+  apiGateway:
+    minimumCompressionSize: 1024 # Enable gzip compression for responses > 1 KB
+  environment:
+    AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+    GENRES_TABLE: Genre-${self:provider.stage}
+    MOVIES_TABLE: Movie-${self:provider.stage}
+    MOVIES_S3_BUCKET: abohemed-serverless-movies-images-${self:provider.stage}
+    SIGNED_URL_EXPIRATION: 300
+  tracing:
+    apiGateway: true
+    lambda: true  
+      
+custom:
+  webpack:
+    webpackConfig: ./webpack.config.js
+    includeModules: true
+  topicName: imagesTopic-${self:provider.stage}
+  documentation:
+    api:
+      info:
+        version: 1.0.0
+        title: "Movies API"
+        description: "Serverless application for movies database"
+    models:
+      - name: CreateGenreRequest
+        description: "Model for creating a movie genre"
+        contentType: "application/json"
+        schema: ${file(models/create_genre_request.json)}   
+      - name: CreateMovieRequest
+        description: "Model for creating a movie"
+        contentType: "application/json"
+        schema: ${file(models/create_movie_request.json)}   
+
+functions:
+
+  Auth:
+    handler: src/lambda/auth/rs256Auth0Authorizer.handler
+
+  GetGenres:
+    handler: src/lambda/http/getGenres.handler
+    events:
+      - http:
+          method: get
+          path: genres
+          cors: true
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Query
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.GENRES_TABLE}
+      - Effect: Allow
+        Action:
+          - xray:PutTraceSegments
+          - xray:PutTelemetryRecords
+        Resource: "*"            
+
+  CreateGenre:
+    handler: src/lambda/http/createGenre.handler
+    events:
+      - http:
+          method: post
+          path: genres
+          cors: true
+          authorizer: Auth
+          reqValidatorName: RequestBodyValidator
+          documentation:
+            summary: "Create a new genre"
+            description: "Create a new genre"
+            requestModels:
+              "application/json": "CreateGenreRequest"      
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:PutItem
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.GENRES_TABLE}      
+      - Effect: Allow
+        Action:
+          - xray:PutTraceSegments
+          - xray:PutTelemetryRecords
+        Resource: "*"      
+          
+  GetMovies:
+    handler: src/lambda/http/getMovies.handler
+    events:
+      - http:
+          method: get
+          path: genres/{genreId}/movies
+          cors: true
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:GetItem
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.GENRES_TABLE}      
+      - Effect: Allow
+        Action:
+          - dynamodb:Query
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.MOVIES_TABLE}      
+      - Effect: Allow
+        Action:
+          - xray:PutTraceSegments
+          - xray:PutTelemetryRecords
+        Resource: "*"      
+              
+  GetMovie:
+    handler: src/lambda/http/getMovie.handler
+    events:
+      - http:
+          method: get
+          path: movies/{movieId}
+          cors: true
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Query
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.MOVIES_TABLE}      
+      - Effect: Allow
+        Action:
+          - xray:PutTraceSegments
+          - xray:PutTelemetryRecords
+        Resource: "*"      
+
+
+  DeleteMovie:
+    handler: src/lambda/http/deleteMovie.handler
+    events:
+      - http:
+          method: delete
+          path: movies/{movieId}
+          cors: true
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:DeleteItem
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.MOVIES_TABLE}      
+      - Effect: Allow
+        Action:
+          - xray:PutTraceSegments
+          - xray:PutTelemetryRecords
+        Resource: "*"      
+                                      
+  CreateMovie:
+    handler: src/lambda/http/createMovie.handler
+    events:
+      - http:
+          method: post
+          path: genres/{genreId}/movies
+          cors: true
+          authorizer: Auth
+          reqValidatorName: RequestBodyValidator
+          documentation:
+            summary: "Create a new movie"
+            description: "Create a new movie"
+            requestModels:
+              "application/json": "CreateMovieRequest"      
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:GetItem
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.GENRES_TABLE}      
+      - Effect: Allow
+        Action:
+          - dynamodb:PutItem
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.MOVIES_TABLE}      
+      - Effect: 'Allow'
+        Action:
+          - s3:PutObject
+        Resource: arn:aws:s3:::${self:provider.environment.MOVIES_S3_BUCKET}/*       
+      - Effect: Allow
+        Action:
+          - xray:PutTraceSegments
+          - xray:PutTelemetryRecords
+        Resource: "*"                  
+          
+resources:
+  Resources:
+    GatewayResponseDefault4XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS,POST'"
+        ResponseType: DEFAULT_4XX
+        RestApiId:
+          Ref: ApiGatewayRestApi
+
+    RequestBodyValidator:  
+      Type: "AWS::ApiGateway::RequestValidator"
+      Properties:
+        Name: 'request-body-validator'
+        RestApiId: 
+          Ref: ApiGatewayRestApi
+        ValidateRequestBody: true
+        ValidateRequestParameters: false  
+
+    GenresDynamoDBTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.GENRES_TABLE}
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: id
+            KeyType: RANGE 
+        BillingMode: PAY_PER_REQUEST
+
+    MoviesDynamoDBTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.MOVIES_TABLE}
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: movieId
+            AttributeType: S   
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: movieId
+            KeyType: RANGE
+        BillingMode: PAY_PER_REQUEST      
+ 
+    AttachmentsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:provider.environment.MOVIES_S3_BUCKET}
+        # Set the CORS policy
+        CorsConfiguration:
+          CorsRules:
+            -
+              AllowedOrigins:
+                - '*'
+              AllowedHeaders:
+                - '*'
+              AllowedMethods:
+                - GET
+                - PUT
+                - POST
+                - DELETE
+                - HEAD
+              MaxAge: 3000     
+    
+    WebAppS3BucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket: !Ref AttachmentsBucket
+        PolicyDocument:
+          Id: MyPolicy
+          Version: "2012-10-17"
+          Statement:
+            - Sid: PublicReadForGetBucketObjects
+              Effect: Allow
+              Principal: "*"
+              Action:
+              - s3:GetObject
+              Resource: arn:aws:s3:::${self:provider.environment.MOVIES_S3_BUCKET}/*     
+    
+   
